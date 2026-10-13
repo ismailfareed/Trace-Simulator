@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Telecom Trace Simulator</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>
+:root{--bg:#eef1f4;--card:#fff;--fg:#14202b;--mut:#5c6b78;--line:#d3dae1;--acc:#0f766e;--req:#1d4ed8;--rsp:#7c3aed;--err:#b91c1c;--hl:#e6f2f1;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f161c;--card:#17212a;--fg:#e4ebf0;--mut:#8fa1af;--line:#2a3845;--acc:#2dd4bf;--req:#7aa7ff;--rsp:#c4a2ff;--err:#ff8a8a;--hl:#1b2c33}}
+:root[data-theme="dark"]{--bg:#0f161c;--card:#17212a;--fg:#e4ebf0;--mut:#8fa1af;--line:#2a3845;--acc:#2dd4bf;--req:#7aa7ff;--rsp:#c4a2ff;--err:#ff8a8a;--hl:#1b2c33}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 "IBM Plex Sans",system-ui,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:26px;margin:0 0 4px;letter-spacing:-.01em}
+.sub{color:var(--mut);margin:0 0 18px;max-width:70ch}
+.mono,pre,.k,.v{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace}
+#drop{border:2px dashed var(--line);border-radius:10px;padding:22px;text-align:center;background:var(--card);transition:border-color .15s,background .15s}
+#drop.on{border-color:var(--acc);background:var(--hl)}
+button,select,input[type=search]{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 10px}
+button{cursor:pointer}button:hover{border-color:var(--acc)}
+button.pri{background:var(--acc);color:var(--bg);border-color:var(--acc);font-weight:600}
+button.tab[aria-pressed=true]{border-color:var(--acc);background:var(--hl);font-weight:600}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+#stats{display:flex;flex-wrap:wrap;gap:8px 22px;margin:16px 0 8px;color:var(--mut)}
+#stats b{color:var(--fg);font-weight:600}
+#ctl{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+#ctl input{flex:1 1 200px}
+.sp{flex:1}
+.row{background:var(--card);border:1px solid var(--line);border-radius:6px;margin-bottom:4px}
+.row summary{display:grid;grid-template-columns:48px 112px 1.6em minmax(120px,1fr) 200px 64px;gap:8px;padding:7px 10px;cursor:pointer;align-items:center;list-style:none;font-size:13.5px}
+.row summary::-webkit-details-marker{display:none}
+.row[open]{border-color:var(--acc)}
+.row[open] summary{background:var(--hl)}
+.cmd{font-weight:500}.q .cmd,.q .ar{color:var(--req)}.r .cmd,.r .ar{color:var(--rsp)}
+.bad{color:var(--err);font-weight:600}
+.dim{color:var(--mut)}
+.det{padding:8px 12px 12px;border-top:1px solid var(--line)}
+.det table{border-collapse:collapse;width:100%;font-size:13px}
+.det td{padding:2px 8px 2px 0;vertical-align:top;word-break:break-all}
+.k{color:var(--acc);white-space:nowrap}.n{color:var(--mut)}
+.tlv .k{color:var(--rsp)}
+.sec{margin:10px 0 4px;font-weight:600;font-size:13px}
+pre{margin:6px 0 0;overflow-x:auto;font-size:12.5px;line-height:1.45}
+#txt{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:12px;max-height:70vh;overflow:auto}
+.warn{color:var(--err);margin:8px 0}
+@media(max-width:700px){.row summary{grid-template-columns:40px 1.4em 1fr 52px}.hm{display:none}}
+</style>
+</head>
+<body>
+<main>
+<h1>Telecom Trace Simulator</h1>
+<p class="sub">Upload a tcpdump capture (.pcap or .pcapng). The tool detects the protocol of each message automatically (SMPP, Diameter for Gy/Gx/Rx charging and policy, GTPv2-C for SGW–PGW S5/S8, PFCP for SMF–UPF N4) and prints every header field and parameter. Everything runs in your browser; the file is never uploaded.</p>
+<div id="drop">
+  <p style="margin:0 0 10px">Drop a capture here, or
+  <label><input type="file" id="f" accept=".pcap,.pcapng,.cap" hidden><button class="pri" onclick="f.click()">Choose file</button></label>
+  <button id="demo">Load sample trace</button></p>
+  <div class="dim" style="font-size:13px">Ethernet, Linux cooked, raw IP, VLAN; IPv4 and IPv6; TCP and UDP on any port. SCTP-based protocols (NGAP, S1AP) and HTTP/2 SBI are not decoded yet.</div>
+</div>
+<div id="msg"></div>
+<div id="stats"></div>
+<div id="ctl" hidden>
+  <input type="search" id="q" placeholder="Filter: command, number, text, message id…" aria-label="Filter">
+  <select id="proto" aria-label="Protocol"></select>
+  <select id="cmd" aria-label="Command"></select>
+  <select id="conn" aria-label="Connection"></select>
+  <button class="tab" id="t1" aria-pressed="true">Packets</button>
+  <button class="tab" id="t2" aria-pressed="false">Text trace</button>
+  <span class="sp"></span>
+  <button id="cp">Copy trace</button>
+  <button id="dl">Download .txt</button>
+</div>
+<div id="out"></div>
+</main>
+<script>
+const $=s=>document.querySelector(s), f=$('#f');
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const hx=(b,s='')=>[...b].map(x=>x.toString(16).padStart(2,'0')).join(s);
+const h8=n=>'0x'+n.toString(16).padStart(2,'0'), h32=n=>'0x'+n.toString(16).padStart(8,'0'), h16=n=>'0x'+n.toString(16).padStart(4,'0');
+const lat=b=>{let s='';for(const c of b)s+=String.fromCharCode(c);return s};
+/* ---------- SMPP dictionaries ---------- */
+const BASE={0:'generic_nack',1:'bind_receiver',2:'bind_transmitter',3:'query_sm',4:'submit_sm',5:'deliver_sm',6:'unbind',7:'replace_sm',8:'cancel_sm',9:'bind_transceiver',0x0B:'outbind',0x15:'enquire_link',0x21:'submit_multi',0x102:'alert_notification',0x103:'data_sm'};
+const cname=id=>{if(id===0x80000000)return'generic_nack';const b=BASE[id&0x7fffffff];return b?b+(id>>>31?'_resp':''):null};
+const ST={0:'ESME_ROK',1:'ESME_RINVMSGLEN',2:'ESME_RINVCMDLEN',3:'ESME_RINVCMDID',4:'ESME_RINVBNDSTS',5:'ESME_RALYBND',6:'ESME_RINVPRTFLG',7:'ESME_RINVREGDLVFLG',8:'ESME_RSYSERR',0xA:'ESME_RINVSRCADR',0xB:'ESME_RINVDSTADR',0xC:'ESME_RINVMSGID',0xD:'ESME_RBINDFAIL',0xE:'ESME_RINVPASWD',0xF:'ESME_RINVSYSID',0x11:'ESME_RCANCELFAIL',0x13:'ESME_RREPLACEFAIL',0x14:'ESME_RMSGQFUL',0x15:'ESME_RINVSERTYP',0x33:'ESME_RINVNUMDESTS',0x34:'ESME_RINVDLNAME',0x40:'ESME_RINVDESTFLAG',0x42:'ESME_RINVSUBREP',0x43:'ESME_RINVESMCLASS',0x44:'ESME_RCNTSUBDL',0x45:'ESME_RSUBMITFAIL',0x48:'ESME_RINVSRCTON',0x49:'ESME_RINVSRCNPI',0x50:'ESME_RINVDSTTON',0x51:'ESME_RINVDSTNPI',0x53:'ESME_RINVSYSTYP',0x54:'ESME_RINVREPFLAG',0x55:'ESME_RINVNUMMSGS',0x58:'ESME_RTHROTTLED',0x61:'ESME_RINVSCHED',0x62:'ESME_RINVEXPIRY',0x63:'ESME_RINVDFTMSGID',0x64:'ESME_RX_T_APPN',0x65:'ESME_RX_P_APPN',0x66:'ESME_RX_R_APPN',0x67:'ESME_RQUEUEFULL',0xC0:'ESME_RINVOPTPARSTREAM',0xC1:'ESME_ROPTPARNOTALLWD',0xC2:'ESME_RINVPARLEN',0xC3:'ESME_RMISSINGOPTPARAM',0xC4:'ESME_RINVOPTPARAMVAL',0xFE:'ESME_RDELIVERYFAILURE',0xFF:'ESME_RUNKNOWNERR'};
+const TON=['Unknown','International','National','Network specific','Subscriber number','Alphanumeric','Abbreviated'];
+const NPI={0:'Unknown',1:'ISDN (E.164)',3:'Data (X.121)',4:'Telex (F.69)',6:'Land mobile (E.212)',8:'National',9:'Private',10:'ERMES',14:'Internet (IP)',18:'WAP client id'};
+const DC={0:'SMSC default (GSM 7-bit)',1:'IA5 / ASCII',2:'Octet unspecified',3:'Latin-1',4:'Octet unspecified',5:'JIS',6:'Cyrillic',7:'Latin/Hebrew',8:'UCS2',9:'Pictogram',10:'ISO-2022-JP',13:'Extended Kanji JIS',14:'KS C 5601'};
+const MS={1:'ENROUTE',2:'DELIVERED',3:'EXPIRED',4:'DELETED',5:'UNDELIVERABLE',6:'ACCEPTED',7:'UNKNOWN',8:'REJECTED'};
+const TLV={5:'dest_addr_subunit',6:'dest_network_type',7:'dest_bearer_type',8:'dest_telematics_id',0xD:'source_addr_subunit',0xE:'source_network_type',0xF:'source_bearer_type',0x10:'source_telematics_id',0x17:'qos_time_to_live',0x19:'payload_type',0x1D:'additional_status_info_text',0x1E:'receipted_message_id',0x30:'ms_msg_wait_facilities',0x201:'privacy_indicator',0x202:'source_subaddress',0x203:'dest_subaddress',0x204:'user_message_reference',0x205:'user_response_code',0x20A:'source_port',0x20B:'destination_port',0x20C:'sar_msg_ref_num',0x20D:'language_indicator',0x20E:'sar_total_segments',0x20F:'sar_segment_seqnum',0x210:'sc_interface_version',0x302:'callback_num_pres_ind',0x303:'callback_num_atag',0x304:'number_of_messages',0x381:'callback_num',0x420:'dpf_result',0x421:'set_dpf',0x422:'ms_availability_status',0x423:'network_error_code',0x424:'message_payload',0x425:'delivery_failure_reason',0x426:'more_messages_to_send',0x427:'message_state',0x428:'congestion_state',0x501:'ussd_service_op',0x1201:'display_time',0x1203:'sms_signal',0x1204:'ms_validity',0x130C:'alert_on_message_delivery',0x1380:'its_reply_type',0x1383:'its_session_info'};
+const STRT=new Set([0x1D,0x1E,0x303,0x381]);
+const G7="@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ\x1bÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà";
+const G7X={0x0A:'\f',0x14:'^',0x28:'{',0x29:'}',0x2F:'\\',0x3C:'[',0x3D:'~',0x3E:']',0x40:'|',0x65:'€'};
+function dec(b,dc){
+  if(dc===8)return new TextDecoder('utf-16be').decode(b);
+  if(dc===3||dc===1)return lat(b);
+  if(dc===0){let s='';for(let i=0;i<b.length;i++){const c=b[i]&0x7f;if(c===0x1b&&i+1<b.length){s+=G7X[b[++i]&0x7f]||'?'}else s+=G7[c]||'?'}return s}
+  return '(binary) '+hx(b,' ');
+}
+/* ---------- PDU decoder ---------- */
+function R(b,s,e){const o={b,p:s,e,
+  need(n){if(this.p+n>this.e)throw new Error('truncated field')},
+  u8(){this.need(1);return b[this.p++]},
+  u16(){this.need(2);const v=(b[this.p]<<8)|b[this.p+1];this.p+=2;return v},
+  u32(){this.need(4);const v=((b[this.p]<<24)|(b[this.p+1]<<16)|(b[this.p+2]<<8)|b[this.p+3])>>>0;this.p+=4;return v},
+  cs(){let i=this.p;while(i<this.e&&b[i])i++;if(i>=this.e)throw new Error('unterminated C-string');const s=lat(b.subarray(this.p,i));this.p=i+1;return s},
+  by(n){this.need(n);const r=b.subarray(this.p,this.p+n);this.p+=n;return r}};return o}
+function decode(b,off,len,id){
+  const P=[],T=[],f=(k,v,n)=>P.push([k,v,n||'']),q=s=>JSON.stringify(s);
+  const r=R(b,off+16,off+len),base=id&0x7fffffff,resp=id>>>31,ctx={dc:0,esm:0},more=()=>r.p<r.e;
+  const addr=p=>{const t=r.u8(),n=r.u8();f(p+'_addr_ton',t,TON[t]||'');f(p+'_addr_npi',n,NPI[n]||'');f(p+'_addr',q(r.cs()))};
+  const msg=(k,m)=>{let t=m;
+    if(ctx.esm&0x40&&m.length){const n=m[0],ies=[];let i=1;
+      while(i+1<=n){const t0=m[i],l=m[i+1],d=m.subarray(i+2,i+2+l);
+        ies.push(t0===0?`concat ref=${d[0]} part ${d[2]}/${d[1]}`:t0===8?`concat16 ref=${(d[0]<<8)|d[1]} part ${d[3]}/${d[2]}`:`IE ${h8(t0)} ${hx(d)}`);i+=2+l}
+      f('udh',ies.join('; '),`${n+1} bytes`);t=m.subarray(n+1)}
+    f(k,q(dec(t,ctx.dc)),`${t.length} bytes`);f(k+'_hex',hx(m,' '))};
+  const esmN=e=>['Default mode','Datagram','Forward','Store and forward'][e&3]+(((e>>2)&15)===1?', SMSC delivery receipt':'')+(e&0x40?', UDHI':'')+(e&0x80?', reply path':'');
+  const sm=mid=>{f('service_type',q(r.cs()));addr('source');mid();
+    const e=r.u8();ctx.esm=e;f('esm_class',h8(e),esmN(e));f('protocol_id',r.u8());f('priority_flag',r.u8());
+    f('schedule_delivery_time',q(r.cs()));f('validity_period',q(r.cs()));
+    const rd=r.u8();f('registered_delivery',h8(rd),['No receipt','Final receipt','Failure receipt only'][rd&3]||'');
+    f('replace_if_present_flag',r.u8());const dc=r.u8();ctx.dc=dc;f('data_coding',h8(dc),DC[dc]||'');
+    f('sm_default_msg_id',r.u8());const n=r.u8();f('sm_length',n);msg('short_message',r.by(n))};
+  let known=true;
+  try{
+    if(id===0x80000000||base===6||base===0x15){}
+    else if([1,2,9].includes(base)&&!resp){f('system_id',q(r.cs()));f('password',q(r.cs()));f('system_type',q(r.cs()));
+      const v=r.u8();f('interface_version',h8(v),v===0x34?'SMPP 3.4':v===0x50?'SMPP 5.0':'');
+      const t=r.u8(),n=r.u8();f('addr_ton',t,TON[t]||'');f('addr_npi',n,NPI[n]||'');f('address_range',q(r.cs()))}
+    else if([1,2,9].includes(base)&&resp){if(more())f('system_id',q(r.cs()))}
+    else if(base===0x0B){f('system_id',q(r.cs()));f('password',q(r.cs()))}
+    else if(base===4||base===5){if(resp){if(more())f('message_id',q(r.cs()))}else sm(()=>addr('destination'))}
+    else if(base===0x21&&!resp){sm(()=>{const n=r.u8();f('number_of_dests',n);
+      for(let i=0;i<n;i++){const k=r.u8();f(`dest[${i}].dest_flag`,k,k===1?'SME address':'Distribution list');
+        if(k===1)addr(`dest[${i}]`);else f(`dest[${i}].dl_name`,q(r.cs()))}})}
+    else if(base===0x103){if(resp){if(more())f('message_id',q(r.cs()))}else{f('service_type',q(r.cs()));addr('source');addr('destination');
+      const e=r.u8();ctx.esm=e;f('esm_class',h8(e),esmN(e));f('registered_delivery',h8(r.u8()));const dc=r.u8();ctx.dc=dc;f('data_coding',h8(dc),DC[dc]||'')}}
+    else if(base===3){if(resp){f('message_id',q(r.cs()));f('final_date',q(r.cs()));const s=r.u8();f('message_state',s,MS[s]||'');f('error_code',r.u8())}else{f('message_id',q(r.cs()));addr('source')}}
+    else if(base===7&&!resp){f('message_id',q(r.cs()));addr('source');f('schedule_delivery_time',q(r.cs()));f('validity_period',q(r.cs()));
+      f('registered_delivery',h8(r.u8()));f('sm_default_msg_id',r.u8());const n=r.u8();f('sm_length',n);msg('short_message',r.by(n))}
+    else if(base===8&&!resp){f('service_type',q(r.cs()));f('message_id',q(r.cs()));addr('source');addr('destination')}
+    else if(base===0x102){addr('source');addr('esme')}
+    else if(len>16&&!(resp&&base!==0x21)){known=false}
+    if(!known&&more())f('body_hex',hx(b.subarray(r.p,r.e),' '));
+    else while(r.e-r.p>=4){const tag=r.u16(),l=r.u16(),v=r.by(l);let s;
+      if(STRT.has(tag))s=q(lat(v).replace(/\0+$/,''));
+      else if(tag===0x424){s=q(dec(v,ctx.dc))}
+      else if(tag===0x427&&l===1)s=`${v[0]} (${MS[v[0]]||'?'})`;
+      else if(l>0&&l<=4){let n=0;for(const c of v)n=n*256+c;s=`${n} (0x${hx(v)})`}else s=hx(v,' ');
+      T.push([`${TLV[tag]||'unknown_tlv'} (${h16(tag)})`,s,`len=${l}`])}
+    if(more()&&known)f('trailing_hex',hx(b.subarray(r.p,r.e),' '));
+  }catch(e){f('decode_error',e.message,'');if(r.p<r.e)f('body_hex',hx(b.subarray(r.p,r.e),' '))}
+  return{P,T};
+}
+/* ---------- capture parsing ---------- */
+function parseCap(buf){
+  const dv=new DataView(buf),pk=[],m=dv.getUint32(0,true);
+  if(m===0x0a0d0d0a){
+    let o=0,le=dv.getUint32(8,true)===0x1a2b3c4d;const ifs=[];
+    while(o+12<=buf.byteLength){const t=dv.getUint32(o,le),l=dv.getUint32(o+4,le);if(l<12)break;
+      if(t===1){let res=1e-6,i=o+16;while(i+4<o+l){const c=dv.getUint16(i,le),n=dv.getUint16(i+2,le);if(c===0)break;
+        if(c===9){const v=dv.getUint8(i+4);res=v&128?Math.pow(2,-(v&127)):Math.pow(10,-v)}i+=4+((n+3)&~3)}
+        ifs.push({link:dv.getUint16(o+8,le),res})}
+      else if(t===6){const it=ifs[dv.getUint32(o+8,le)]||{link:1,res:1e-6},hi=dv.getUint32(o+12,le),lo=dv.getUint32(o+16,le),cl=dv.getUint32(o+20,le);
+        pk.push({t:(hi*4294967296+lo)*it.res,link:it.link,data:new Uint8Array(buf,o+28,cl)})}
+      else if(t===3){const cl=Math.min(l-16,dv.getUint32(o+8,le));pk.push({t:0,link:(ifs[0]||{link:1}).link,data:new Uint8Array(buf,o+12,cl)})}
+      o+=(l+3)&~3}
+    return pk}
+  const t={0xa1b2c3d4:[1,1e-6],0xa1b23c4d:[1,1e-9],0xd4c3b2a1:[0,1e-6],0x4d3cb2a1:[0,1e-9]}[m];
+  if(!t)throw new Error('Not a pcap or pcapng file (unknown magic number).');
+  const le=!!t[0],link=dv.getUint32(20,le)&0xfffffff;let o=24;
+  while(o+16<=buf.byteLength){const cl=dv.getUint32(o+8,le);if(o+16+cl>buf.byteLength)break;
+    pk.push({t:dv.getUint32(o,le)+dv.getUint32(o+4,le)*t[1],link,data:new Uint8Array(buf,o+16,cl)});o+=16+cl}
+  return pk}
+function toFlows(pk){
+  const fl=new Map();
+  pk.forEach((p,i)=>{const d=p.data;let o=0,et=0x800;
+    if(p.link===1){et=(d[12]<<8)|d[13];o=14;while(et===0x8100||et===0x88a8){et=(d[o+2]<<8)|d[o+3];o+=4}}
+    else if(p.link===113){et=(d[14]<<8)|d[15];o=16}
+    else if(p.link===276){et=(d[0]<<8)|d[1];o=20}
+    else if(p.link===0){o=4;et=(d[0]===2||d[3]===2)?0x800:0x86dd}
+    else if(p.link===101||p.link===12){et=(d[0]>>4)===6?0x86dd:0x800}
+    else return;
+    let src,dst,nh,end;
+    if(et===0x800&&(d[o]>>4)===4){const ihl=(d[o]&15)*4;nh=d[o+9];end=Math.min(d.length,o+((d[o+2]<<8)|d[o+3]));
+      src=[...d.subarray(o+12,o+16)].join('.');dst=[...d.subarray(o+16,o+20)].join('.');o+=ihl}
+    else if(et===0x86dd&&(d[o]>>4)===6){nh=d[o+6];end=Math.min(d.length,o+40+((d[o+4]<<8)|d[o+5]));
+      src='['+hx(d.subarray(o+8,o+24)).replace(/(.{4})(?=.)/g,'$1:')+']';dst='['+hx(d.subarray(o+24,o+40)).replace(/(.{4})(?=.)/g,'$1:')+']';o+=40;
+      while([0,43,60].includes(nh)){nh=d[o];o+=(d[o+1]+1)*8}}
+    else return;
+    if(nh===17&&o+8<=end){const sp=(d[o]<<8)|d[o+1],dp=(d[o+2]<<8)|d[o+3],pl=d.subarray(o+8,end),k=`U${src}:${sp}>${dst}:${dp}`;if(pl.length){if(!fl.has(k))fl.set(k,{src,sp,dst,dp,udp:1,segs:[]});fl.get(k).segs.push({seq:0,t:p.t,fr:i+1,data:pl})}return}
+    if(nh!==6||o+20>end)return;
+    const sp=(d[o]<<8)|d[o+1],dp=(d[o+2]<<8)|d[o+3],seq=((d[o+4]<<24)|(d[o+5]<<16)|(d[o+6]<<8)|d[o+7])>>>0,doff=(d[o+12]>>4)*4,pl=d.subarray(o+doff,end);
+    if(!pl.length)return;
+    const k=`${src}:${sp}>${dst}:${dp}`;
+    if(!fl.has(k))fl.set(k,{src,sp,dst,dp,segs:[]});
+    fl.get(k).segs.push({seq,t:p.t,fr:i+1,data:pl})});
+  return[...fl.values()]}
+function analyze(flows){
+  const out=[];let streams=0;
+  for(const fl of flows){if(fl.udp){let c=0;for(const s of fl.segs){const m=decDgram(s.data);if(m){out.push({t:s.t,fr:s.fr,...ends(fl),...m,hex:s.data});c++}}if(c)streams++;continue}
+    const base=fl.segs[0].seq,segs=fl.segs.slice().sort((a,b)=>((a.seq-base)|0)-((b.seq-base)|0)),map=[],parts=[];
+    let exp=0,tot=0;
+    for(const s of segs){const rel=(s.seq-base)|0,e=rel+s.data.length;if(e<=exp)continue;
+      const d=rel<exp?s.data.subarray(exp-rel):s.data;map.push({off:tot,t:s.t,fr:s.fr});parts.push(d);tot+=d.length;exp=e}
+    const st=new Uint8Array(tot);let w=0;for(const d of parts){st.set(d,w);w+=d.length}
+    const dv=new DataView(st.buffer);let p=0,n=0,mi=0;
+    const ok=(l,id,s)=>l>=16&&l<=65536&&cname(id)&&s<0x500;
+    while(p+16<=st.length){
+      const l=dv.getUint32(p),id=dv.getUint32(p+4),s=dv.getUint32(p+8);
+      if(!ok(l,id,s)){const dl=diaLen(st,p);if(dl){if(p+dl>st.length)break;while(mi+1<map.length&&map[mi+1].off<=p)mi++;out.push({t:map[mi].t,fr:map[mi].fr,...ends(fl),...decDia(st,p,dl)});p+=dl;n++;continue}p++;continue}
+      if(p+l>st.length)break;
+      while(mi+1<map.length&&map[mi+1].off<=p)mi++;
+      const d=decode(st,p,l,id);
+      out.push({t:map[mi].t,fr:map[mi].fr,src:`${fl.src}:${fl.sp}`,dst:`${fl.dst}:${fl.dp}`,
+        conn:[`${fl.src}:${fl.sp}`,`${fl.dst}:${fl.dp}`].sort().join(' ↔ '),
+        ...smppMeta(id,l,dv.getUint32(p+8),dv.getUint32(p+12)),hex:st.subarray(p,p+l),...d});
+      p+=l;n++}
+    if(n)streams++}
+  out.sort((a,b)=>a.t-b.t||a.fr-b.fr);
+  out.forEach((e,i)=>e.n=i+1);
+  return{out,streams}}
+/* ---------- other protocols: Diameter, GTPv2-C, PFCP ---------- */
+const U=(b,o)=>((b[o]<<24)|(b[o+1]<<16)|(b[o+2]<<8)|b[o+3])>>>0;
+const dict=s=>Object.fromEntries(s.trim().split('\n').map(l=>{const a=l.trim().split(' ');return[a[0],a.slice(1)]}));
+const ip=a=>a.length===4?[...a].join('.'):a.length===16?[...a].reduce((s,x,i)=>s+(i&&!(i&1)?':':'')+x.toString(16).padStart(2,'0'),''):hx(a);
+const lbl=v=>{const o=[];let i=0;while(i<v.length){o.push(lat(v.subarray(i+1,i+1+v[i])));i+=v[i]+1}return o.join('.')};
+const big=v=>{if(v.length>6)return BigInt('0x'+hx(v)).toString();let n=0;for(const c of v)n=n*256+c;return String(n)};
+const ntp=n=>new Date((n-2208988800)*1000).toISOString();
+const ends=fl=>({src:`${fl.src}:${fl.sp}`,dst:`${fl.dst}:${fl.dp}`,conn:[`${fl.src}:${fl.sp}`,`${fl.dst}:${fl.dp}`].sort().join(' ↔ ')});
+const smppMeta=(id,l,s,q)=>({proto:'SMPP',name:cname(id),resp:!!(id>>>31),seq:q,stat:ST[s]||h32(s),isErr:!!(id>>>31)&&s!==0,len:l,hdr:[['command_length',l,''],['command_id',h32(id),cname(id)],['command_status',h32(s),ST[s]||''],['sequence_number',q,'']]});
+const ind=n=>'\u00a0\u00a0'.repeat(n);
+/* Diameter (Gy/Ro, Gx, Rx, Rf/Gz, base) */
+const D0=dict(`1 User-Name s
+8 Framed-IP-Address o
+25 Class o
+27 Session-Timeout u
+30 Called-Station-Id s
+44 Acct-Session-Id o
+55 Event-Timestamp t
+85 Acct-Interim-Interval u
+257 Host-IP-Address a
+258 Auth-Application-Id u
+259 Acct-Application-Id u
+260 Vendor-Specific-Application-Id g
+263 Session-Id s
+264 Origin-Host s
+265 Supported-Vendor-Id u
+266 Vendor-Id u
+267 Firmware-Revision u
+268 Result-Code e
+269 Product-Name s
+273 Disconnect-Cause u
+274 Auth-Request-Type u
+277 Auth-Session-State u
+278 Origin-State-Id u
+279 Failed-AVP g
+281 Error-Message s
+282 Route-Record s
+283 Destination-Realm s
+284 Proxy-Info g
+285 Re-Auth-Request-Type u
+293 Destination-Host s
+294 Error-Reporting-Host s
+296 Origin-Realm s
+297 Experimental-Result g
+298 Experimental-Result-Code e
+411 CC-Correlation-Id o
+412 CC-Input-Octets U
+413 CC-Money g
+414 CC-Output-Octets U
+415 CC-Request-Number u
+416 CC-Request-Type e
+417 CC-Service-Specific-Units U
+419 CC-Sub-Session-Id U
+420 CC-Time u
+421 CC-Total-Octets U
+423 Cost-Information g
+425 Currency-Code u
+426 Credit-Control u
+427 Credit-Control-Failure-Handling u
+429 Exponent i
+430 Final-Unit-Indication g
+431 Granted-Service-Unit g
+432 Rating-Group u
+436 Requested-Action e
+437 Requested-Service-Unit g
+439 Service-Identifier u
+443 Subscription-Id g
+444 Subscription-Id-Data s
+445 Unit-Value g
+446 Used-Service-Unit g
+447 Value-Digits I
+448 Validity-Time u
+449 Final-Unit-Action e
+450 Subscription-Id-Type e
+455 Multiple-Services-Indicator u
+456 Multiple-Services-Credit-Control g
+458 User-Equipment-Info g
+461 Service-Context-Id s
+480 Accounting-Record-Type u
+485 Accounting-Record-Number u`);
+const D3=dict(`1 3GPP-IMSI s
+2 3GPP-Charging-Id u
+3 3GPP-PDP-Type u
+8 3GPP-IMSI-MCC-MNC s
+13 3GPP-Charging-Characteristics s
+18 3GPP-SGSN-MCC-MNC s
+21 3GPP-RAT-Type o
+22 3GPP-User-Location-Info o
+504 AF-Application-Identifier o
+505 AF-Charging-Identifier o
+507 Flow-Description s
+510 Flows g
+513 Specific-Action u
+515 Max-Requested-Bandwidth-DL u
+516 Max-Requested-Bandwidth-UL u
+517 Media-Component-Description g
+518 Media-Component-Number u
+520 Media-Type u
+628 Supported-Features g
+629 Feature-List-ID u
+630 Feature-List u
+873 Service-Information g
+874 PS-Information g
+1000 Bearer-Usage u
+1001 Charging-Rule-Install g
+1002 Charging-Rule-Remove g
+1003 Charging-Rule-Definition g
+1004 Charging-Rule-Base-Name s
+1005 Charging-Rule-Name o
+1006 Event-Trigger u
+1008 Offline u
+1009 Online u
+1010 Precedence u
+1016 QoS-Information g
+1018 Charging-Rule-Report g
+1019 PCC-Rule-Status u
+1020 Bearer-Identifier o
+1021 Bearer-Operation u
+1028 QoS-Class-Identifier u
+1031 Rule-Failure-Code u
+1032 RAT-Type u
+1034 Allocation-Retention-Priority g
+1040 APN-Aggregate-Max-Bitrate-DL u
+1041 APN-Aggregate-Max-Bitrate-UL u
+1046 Priority-Level u
+1049 Default-EPS-Bearer-QoS g
+1066 Monitoring-Key o
+1067 Usage-Monitoring-Information g`);
+const RC={2001:'DIAMETER_SUCCESS',2002:'DIAMETER_LIMITED_SUCCESS',3002:'DIAMETER_UNABLE_TO_DELIVER',3003:'DIAMETER_REALM_NOT_SERVED',3004:'DIAMETER_TOO_BUSY',4010:'DIAMETER_END_USER_SERVICE_DENIED',4011:'DIAMETER_CREDIT_CONTROL_NOT_APPLICABLE',4012:'DIAMETER_CREDIT_LIMIT_REACHED',5002:'DIAMETER_UNKNOWN_SESSION_ID',5003:'DIAMETER_AUTHORIZATION_REJECTED',5004:'DIAMETER_INVALID_AVP_VALUE',5005:'DIAMETER_MISSING_AVP',5012:'DIAMETER_UNABLE_TO_COMPLY',5030:'DIAMETER_USER_UNKNOWN',5031:'DIAMETER_RATING_FAILED'};
+const DE={416:{1:'INITIAL_REQUEST',2:'UPDATE_REQUEST',3:'TERMINATION_REQUEST',4:'EVENT_REQUEST'},450:{0:'END_USER_E164',1:'END_USER_IMSI',2:'END_USER_SIP_URI',3:'END_USER_NAI',4:'END_USER_PRIVATE'},449:{0:'TERMINATE',1:'REDIRECT',2:'RESTRICT_ACCESS'},436:{0:'DIRECT_DEBITING',1:'REFUND_ACCOUNT',2:'CHECK_BALANCE',3:'PRICE_ENQUIRY'},268:RC,298:RC};
+const DC_={257:'CE',258:'RA',265:'AA',268:'DE',271:'AC',272:'CC',274:'AS',275:'ST',280:'DW',282:'DP',316:'UL',317:'CL',318:'AI',321:'PU'};
+const APPS={0:'Diameter base',3:'Rf/Gz accounting',4:'Gy/Ro credit control',16777216:'Cx',16777217:'Sh',16777236:'Rx',16777238:'Gx',16777251:'S6a/S6d',16777302:'Sy',16777303:'Sd'};
+function avps(b,s,e,dep,P,x){
+  while(s+8<=e){const c=U(b,s),fl=b[s+4],l=(b[s+5]<<16)|(b[s+6]<<8)|b[s+7],v=fl&128?U(b,s+8):0,h=v?12:8;
+    if(l<h||s+l>e)throw new Error('invalid AVP length at offset '+s);
+    const D=(v===10415?D3:D0)[c],val=b.subarray(s+h,s+l),t=D?D[1]:'o',dw=new DataView(val.buffer,val.byteOffset,val.length);let txt;
+    if(t==='g')txt='';
+    else if(t==='s')txt=JSON.stringify(new TextDecoder().decode(val));
+    else if((t==='u'||t==='e')&&val.length===4){const n=dw.getUint32(0),m=!v&&DE[c];txt=m&&m[n]?`${n} (${m[n]})`:String(n);if((c===268||c===298)&&x.rc==null)x.rc=n}
+    else if(t==='i'&&val.length===4)txt=String(dw.getInt32(0));
+    else if((t==='U'||t==='I')&&val.length===8)txt=String(t==='U'?dw.getBigUint64(0):dw.getBigInt64(0));
+    else if(t==='t'&&val.length===4)txt=ntp(dw.getUint32(0));
+    else if(t==='a'&&val.length>=6)txt=ip(val.subarray(2));
+    else txt=hx(val,' ');
+    P.push([ind(dep)+(D?D[0]:'Unknown-AVP')+` (${c}${v?'/v'+v:''})`,txt,`len=${l-h}${fl&64?' M':''}`]);
+    if(t==='g')avps(b,s+h,s+l,dep+1,P,x);
+    s+=(l+3)&~3}}
+const diaLen=(b,p)=>{if(b[p]!==1||p+20>b.length)return 0;const l=(b[p+1]<<16)|(b[p+2]<<8)|b[p+3],c=(b[p+5]<<16)|(b[p+6]<<8)|b[p+7];return(l>=20&&l<=65535&&!(l&3)&&!(b[p+4]&15)&&DC_[c])?l:0};
+function decDia(b,p,l){
+  const fl=b[p+4],c=(b[p+5]<<16)|(b[p+6]<<8)|b[p+7],app=U(b,p+8),hh=U(b,p+12),ee=U(b,p+16),rq=!!(fl&128),P=[],x={};
+  try{avps(b,p+20,p+l,0,P,x)}catch(e){P.push(['decode_error',e.message,''])}
+  const nm=DC_[c]+(rq?'R':'A');
+  return{proto:'Diameter',name:nm,resp:!rq,seq:hh,len:l,stat:x.rc!=null?`${x.rc} ${(RC[x.rc]||'').replace('DIAMETER_','')}`.trim():'',isErr:!rq&&((x.rc!=null&&(x.rc<2000||x.rc>=3000))||!!(fl&32)),
+    hdr:[['version',1,''],['message_length',l,''],['flags',h8(fl),(rq?'Request':'Answer')+(fl&64?', Proxiable':'')+(fl&32?', Error':'')+(fl&16?', Retransmitted':'')],['command_code',c,nm],['application_id',app,APPS[app]||''],['hop_by_hop_id',h32(hh),''],['end_to_end_id',h32(ee),'']],P,T:[],hex:b.subarray(p,p+l)}}
+/* GTPv2-C (S5/S8, S11) */
+const GM=dict(`1 Echo-Request
+2 Echo-Response
+3 Version-Not-Supported-Indication
+32 Create-Session-Request
+33 Create-Session-Response
+34 Modify-Bearer-Request
+35 Modify-Bearer-Response
+36 Delete-Session-Request
+37 Delete-Session-Response
+38 Change-Notification-Request
+39 Change-Notification-Response
+64 Modify-Bearer-Command
+66 Delete-Bearer-Command
+68 Bearer-Resource-Command
+95 Create-Bearer-Request
+96 Create-Bearer-Response
+97 Update-Bearer-Request
+98 Update-Bearer-Response
+99 Delete-Bearer-Request
+100 Delete-Bearer-Response
+170 Release-Access-Bearers-Request
+171 Release-Access-Bearers-Response
+176 Downlink-Data-Notification
+177 Downlink-Data-Notification-Acknowledge`);
+const GI=dict(`1 IMSI t
+2 Cause c
+3 Recovery i
+71 APN a
+72 AMBR m
+73 EBI e
+74 IP-Address y
+75 MEI t
+76 MSISDN t
+77 Indication o
+78 PCO o
+79 PAA p
+80 Bearer-QoS q
+82 RAT-Type r
+83 Serving-Network n
+84 Bearer-TFT o
+86 ULI o
+87 F-TEID f
+93 Bearer-Context g
+94 Charging-ID i
+95 Charging-Characteristics o
+99 PDN-Type d
+114 UE-Time-Zone o
+126 Port-Number i
+127 APN-Restriction i
+128 Selection-Mode i`);
+const GC={16:'Request accepted',17:'Request accepted partially',64:'Context not found',65:'Invalid message format',66:'Version not supported',67:'Invalid length',68:'Service not supported',69:'Mandatory IE incorrect',70:'Mandatory IE missing',72:'System failure',73:'No resources available',78:'Missing or unknown APN',94:'Request rejected'};
+const RT={1:'UTRAN',2:'GERAN',3:'WLAN',4:'GAN',5:'HSPA Evolution',6:'E-UTRAN',7:'Virtual',8:'E-UTRAN-NB-IoT',9:'LTE-M',10:'NR'};
+const FI={0:'S1-U eNodeB',1:'S1-U SGW',2:'S12 RNC',3:'S12 SGW',4:'S5/S8 SGW GTP-U',5:'S5/S8 PGW GTP-U',6:'S5/S8 SGW GTP-C',7:'S5/S8 PGW GTP-C',10:'S11 MME GTP-C',11:'S11/S4 SGW GTP-C'};
+const k5=(v,o)=>v[o]*4294967296+U(v,o+1);
+function gie(b,s,e,dep,P,x){
+  while(s+4<=e){const t=b[s],l=(b[s+1]<<8)|b[s+2],ins=b[s+3]&15;if(s+4+l>e)throw new Error('invalid IE length at offset '+s);
+    const D=GI[t],ty=D?D[1]:'o',v=b.subarray(s+4,s+4+l);let z;
+    if(ty==='t')z=[...v].map(c=>(c&15).toString(16)+(c>>4).toString(16)).join('').replace(/f/g,'');
+    else if(ty==='c'){x.cause=v[0];z=`${v[0]} ${GC[v[0]]||''}`}
+    else if(ty==='a')z=lbl(v);
+    else if(ty==='e')z=v[0]&15;
+    else if(ty==='r')z=`${v[0]} ${RT[v[0]]||''}`;
+    else if(ty==='n'){const d=[v[0]&15,v[0]>>4,v[1]&15];z=`MCC ${d.join('')} MNC ${[v[2]&15,v[2]>>4,v[1]>>4].filter(n=>n!==15).join('')}`}
+    else if(ty==='f'){const f=v[0],i4=f&128,o=i4?9:5;z=`${FI[f&63]||'interface '+(f&63)} TEID=${h32(U(v,1))}`+(i4?` IPv4=${ip(v.subarray(5,9))}`:'')+(f&64?` IPv6=${ip(v.subarray(o,o+16))}`:'')}
+    else if(ty==='p'){const pt=v[0]&7;z=pt===1?ip(v.subarray(1,5)):pt===2?`${ip(v.subarray(2,18))}/${v[1]}`:`${ip(v.subarray(2,18))}/${v[1]} + ${ip(v.subarray(18,22))}`}
+    else if(ty==='d')z={1:'IPv4',2:'IPv6',3:'IPv4v6',4:'Non-IP'}[v[0]]||v[0];
+    else if(ty==='m')z=`UL ${U(v,0)} kbps, DL ${U(v,4)} kbps`;
+    else if(ty==='q')z=`PCI=${(v[0]>>6)&1} PL=${(v[0]>>2)&15} PVI=${v[0]&1} QCI=${v[1]} MBR-UL=${k5(v,2)} MBR-DL=${k5(v,7)} GBR-UL=${k5(v,12)} GBR-DL=${k5(v,17)} kbps`;
+    else if(ty==='i')z=big(v);
+    else if(ty==='y')z=ip(v);
+    else if(ty==='g')z='';
+    else z=hx(v,' ');
+    P.push([ind(dep)+(D?D[0]:'Unknown-IE')+`[${ins}] (${t})`,z,`len=${l}`]);
+    if(ty==='g')gie(b,s+4,s+4+l,dep+1,P,x);
+    s+=4+l}}
+function decGtp(b){
+  const f=b[0],t=b[1],l=(b[2]<<8)|b[3],tf=f&8,o=tf?8:4,seq=(b[o]<<16)|(b[o+1]<<8)|b[o+2],P=[],x={},nm=GM[t][0];
+  try{gie(b,o+4,Math.min(b.length,l+4),0,P,x)}catch(e){P.push(['decode_error',e.message,''])}
+  const hdr=[['version',2,'GTPv2-C'],['flags',h8(f),(tf?'TEID present':'no TEID')+(f&16?', piggybacked':'')],['message_type',t,nm],['message_length',l,'']];
+  if(tf)hdr.push(['teid',h32(U(b,4)),'']);hdr.push(['sequence_number',seq,'']);
+  return{proto:'GTPv2-C',name:nm,resp:/Response|Acknowledge/.test(nm),seq,len:b.length,stat:x.cause!=null?`${x.cause} ${GC[x.cause]||''}`.trim():'',isErr:x.cause!=null&&x.cause>=64,hdr,P,T:[]}}
+/* PFCP (N4 / Sxb) */
+const PM=dict(`1 Heartbeat-Request
+2 Heartbeat-Response
+3 PFD-Management-Request
+4 PFD-Management-Response
+5 Association-Setup-Request
+6 Association-Setup-Response
+7 Association-Update-Request
+8 Association-Update-Response
+9 Association-Release-Request
+10 Association-Release-Response
+11 Version-Not-Supported-Response
+12 Node-Report-Request
+13 Node-Report-Response
+14 Session-Set-Deletion-Request
+15 Session-Set-Deletion-Response
+50 Session-Establishment-Request
+51 Session-Establishment-Response
+52 Session-Modification-Request
+53 Session-Modification-Response
+54 Session-Deletion-Request
+55 Session-Deletion-Response
+56 Session-Report-Request
+57 Session-Report-Response`);
+const PI=dict(`1 Create-PDR g
+2 PDI g
+3 Create-FAR g
+4 Forwarding-Parameters g
+5 Duplicating-Parameters g
+6 Create-URR g
+7 Create-QER g
+8 Created-PDR g
+9 Update-PDR g
+10 Update-FAR g
+11 Update-Forwarding-Parameters g
+13 Update-URR g
+14 Update-QER g
+15 Remove-PDR i
+16 Remove-FAR i
+17 Remove-URR i
+18 Remove-QER i
+19 Cause c
+20 Source-Interface d
+21 F-TEID t
+22 Network-Instance a
+23 SDF-Filter o
+24 Application-ID a
+25 Gate-Status i
+26 MBR o
+27 GBR o
+29 Precedence i
+31 Volume-Threshold o
+32 Time-Threshold i
+36 Inactivity-Detection-Time i
+37 Reporting-Triggers o
+39 Report-Type i
+40 Offending-IE i
+42 Destination-Interface d
+43 UP-Function-Features o
+44 Apply-Action o
+51 Load-Control-Information g
+52 Sequence-Number i
+53 Metric i
+54 Overload-Control-Information g
+55 Timer i
+56 PDR-ID i
+57 F-SEID s
+58 Application-IDs-PFDs g
+59 PFD-Context g
+60 Node-ID n
+61 PFD-Contents o
+62 Measurement-Method i
+63 Usage-Report-Trigger o
+64 Measurement-Period i
+66 Volume-Measurement o
+67 Duration-Measurement i
+68 Application-Detection-Information g
+69 Time-of-First-Packet T
+70 Time-of-Last-Packet T
+73 Volume-Quota o
+74 Time-Quota i
+77 Query-URR g
+78 Usage-Report-SMR g
+79 Usage-Report-SDR g
+80 Usage-Report-SRR g
+81 URR-ID i
+83 Downlink-Data-Report g
+84 Outer-Header-Creation o
+85 Create-BAR g
+86 Update-BAR g
+88 BAR-ID i
+89 CP-Function-Features o
+93 UE-IP-Address u
+94 Packet-Rate o
+95 Outer-Header-Removal i
+96 Recovery-Time-Stamp T
+108 FAR-ID i
+109 QER-ID i`);
+const PC={1:'Request accepted',64:'Request rejected',65:'Session context not found',66:'Mandatory IE missing',67:'Conditional IE missing',68:'Invalid length',69:'Mandatory IE incorrect',70:'Invalid forwarding policy',71:'Invalid F-TEID allocation option',72:'No established PFCP association',73:'Rule creation/modification failure',74:'PFCP entity in congestion',75:'No resources available',76:'Service not supported',77:'System failure'};
+function pie(b,s,e,dep,P,x){
+  while(s+4<=e){const t=(b[s]<<8)|b[s+1],l=(b[s+2]<<8)|b[s+3];if(s+4+l>e)throw new Error('invalid IE length at offset '+s);
+    const D=PI[t],ty=D?D[1]:'o',v=b.subarray(s+4,s+4+l);let z;
+    if(ty==='c'){x.cause=v[0];z=`${v[0]} ${PC[v[0]]||''}`}
+    else if(ty==='n'){const k=v[0]&15;z=k===0?ip(v.subarray(1,5)):k===1?ip(v.subarray(1,17)):lbl(v.subarray(1))}
+    else if(ty==='s'){const f=v[0];z='SEID=0x'+hx(v.subarray(1,9))+(f&2?' IPv4='+ip(v.subarray(9,13)):'')+(f&1?' IPv6='+ip(v.subarray(f&2?13:9,(f&2?13:9)+16)):'')}
+    else if(ty==='t'){const f=v[0];z=f&4?'CHOOSE':`TEID=${h32(U(v,1))}`+(f&1?' IPv4='+ip(v.subarray(5,9)):'')+(f&2?' IPv6='+ip(v.subarray(f&1?9:5,(f&1?9:5)+16)):'')}
+    else if(ty==='u'){const f=v[0];z=(f&2?'IPv4='+ip(v.subarray(1,5)):'')+(f&1?' IPv6='+ip(v.subarray(f&2?5:1,(f&2?5:1)+16)):'')+(f&4?' (source)':' (destination)')}
+    else if(ty==='d')z={0:'Access',1:'Core',2:'SGi-LAN/N6-LAN',3:'CP-function',4:'5G VN internal'}[v[0]&15]||v[0];
+    else if(ty==='T'&&l===4)z=ntp(U(v,0));
+    else if(ty==='a')z=JSON.stringify(lat(v));
+    else if(ty==='i')z=big(v);
+    else if(ty==='g')z='';
+    else z=hx(v,' ');
+    P.push([ind(dep)+(D?D[0]:'Unknown-IE')+` (${t})`,z,`len=${l}`]);
+    if(ty==='g')pie(b,s+4,s+4+l,dep+1,P,x);
+    s+=4+l}}
+function decPfcp(b){
+  const f=b[0],sf=f&1,t=b[1],l=(b[2]<<8)|b[3],o=sf?12:4,seq=(b[o]<<16)|(b[o+1]<<8)|b[o+2],P=[],x={},nm=PM[t][0];
+  try{pie(b,o+4,Math.min(b.length,l+4),0,P,x)}catch(e){P.push(['decode_error',e.message,''])}
+  const hdr=[['version',1,'PFCP'],['flags',h8(f),(sf?'SEID present':'no SEID')+(f&2?', message priority':'')],['message_type',t,nm],['message_length',l,'']];
+  if(sf)hdr.push(['seid','0x'+hx(b.subarray(4,12)),'']);hdr.push(['sequence_number',seq,'']);
+  return{proto:'PFCP',name:nm,resp:/Response/.test(nm),seq,len:b.length,stat:x.cause!=null?`${x.cause} ${PC[x.cause]||''}`.trim():'',isErr:x.cause!=null&&x.cause>=64,hdr,P,T:[]}}
+const decDgram=b=>{
+  if(b.length<8)return null;const v=b[0]>>5,l=(b[2]<<8)|b[3];
+  if(v===2&&GM[b[1]]&&b.length>=(b[0]&8?12:8)&&l>=4&&l+4<=b.length)return decGtp(b);
+  if(v===1&&!(b[0]&0x1c)&&PM[b[1]]&&l>=4&&l+4<=b.length)return decPfcp(b);
+  return null};
+/* ---------- rendering ---------- */
+let ALL=[],VIEW='p',FN='',FIRST={};
+const tfmt=t=>{const ms=Math.floor(t*1000),us=String(Math.floor((t%1)*1e6)).padStart(6,'0');return new Date(ms).toISOString().slice(0,19).replace('T',' ')+'.'+us};
+const stT=e=>`${h32(e.status)} (${ST[e.status]||'unknown'})`;
+const hexdump=b=>{let s='';for(let i=0;i<b.length;i+=16){const c=b.subarray(i,i+16);s+=i.toString(16).padStart(4,'0')+'  '+hx(c,' ').padEnd(47)+'  '+[...c].map(x=>x>31&&x<127?String.fromCharCode(x):'.').join('')+'\n'}return s};
+function textOf(e){
+  let s=`#${e.n}  ${tfmt(e.t)}  ${e.src} -> ${e.dst}  (frame ${e.fr})\n  ${e.proto} ${e.name}\n`;for(const[k,v,n]of e.hdr)s+=`    ${k}: ${v}${n?'  // '+n:''}\n`;
+  for(const[k,v,n]of e.P)s+=`    ${k}: ${v}${n?'  // '+n:''}\n`;
+  for(const[k,v,n]of e.T)s+=`    TLV ${k}: ${v}  // ${n}\n`;
+  return s}
+function filtered(){
+  const q=$('#q').value.toLowerCase(),c=$('#cmd').value,cn=$('#conn').value,pr=$('#proto').value;
+  return ALL.filter(e=>(!c||e.name===c)&&(!pr||e.proto===pr)&&(!cn||e.conn===cn)&&(!q||(e.name+' '+e.src+' '+e.dst+' '+e.stat+' '+e.seq+' '+e.P.map(x=>x[1]).join(' ')+' '+e.T.map(x=>x[1]).join(' ')).toLowerCase().includes(q)))}
+function render(){
+  const L=filtered(),CAP=1500,sh=L.slice(0,CAP),t0=ALL.length?ALL[0].t:0;
+  let h=L.length>CAP?`<p class="dim">Showing first ${CAP} of ${L.length} PDUs. Download the trace for the full set.</p>`:'';
+  if(!L.length){$('#out').innerHTML='<p class="dim">No PDUs match the current filter.</p>';return}
+  if(VIEW==='t'){$('#out').innerHTML=h+`<pre id="txt">${esc(sh.map(textOf).join('\n'))}</pre>`;return}
+  for(const e of sh){
+    const bad=e.isErr?'bad':'dim';
+    h+=`<details class="row ${e.resp?'r':'q'}"><summary><span class="dim">#${e.n}</span><span class="mono dim hm">+${(e.t-t0).toFixed(6)}</span><span class="ar" title="${esc(e.src)} to ${esc(e.dst)}">${e.src===FIRST[e.conn]?'▶':'◀'}</span><span class="mono cmd"><span class="dim">${e.proto} </span>${e.name}</span><span class="mono ${bad} hm">${esc(e.stat)}</span><span class="mono dim">seq ${e.seq}</span></summary><div class="det">
+    <div class="dim mono" style="font-size:12.5px">${tfmt(e.t)} · ${esc(e.src)} → ${esc(e.dst)} · frame ${e.fr}</div>
+    <div class="sec">Header</div><table>${e.hdr.map(r=>row(r)).join('')}</table>
+    ${e.P.length?`<div class="sec">Body</div><table>${e.P.map(r=>row(r)).join('')}</table>`:''}
+    ${e.T.length?`<div class="sec">Optional parameters (TLV)</div><table class="tlv">${e.T.map(r=>row(r)).join('')}</table>`:''}
+    <div class="sec">Raw PDU</div><pre>${esc(hexdump(e.hex))}</pre></div></details>`}
+  $('#out').innerHTML=h}
+const row=([k,v,n])=>`<tr><td class="k">${esc(k)}</td><td class="v">${esc(v)}</td><td class="n">${esc(n)}</td></tr>`;
+function load(pdus,streams,pkts,name){
+  ALL=pdus;FN=name;
+  const cs=[...new Set(ALL.map(e=>e.name))].sort(),cn=[...new Set(ALL.map(e=>e.conn))];
+  const bad=ALL.filter(e=>e.isErr).length,pc={};ALL.forEach(e=>pc[e.proto]=(pc[e.proto]||0)+1);FIRST={};ALL.forEach(e=>{if(!FIRST[e.conn])FIRST[e.conn]=e.src});$('#proto').innerHTML='<option value="">All protocols</option>'+Object.keys(pc).map(p=>`<option>${p}</option>`).join('');
+  $('#stats').innerHTML=`<span><b>${pkts}</b> packets</span><span>${Object.entries(pc).map(([k,v])=>`<b>${v}</b> ${k}`).join(', ')}</span><span><b>${ALL.length}</b> PDUs</span><span><b>${cs.length}</b> command types</span><span><b${bad?' class="bad"':''}>${bad}</b> error responses</span>`;
+  $('#cmd').innerHTML='<option value="">All commands</option>'+cs.map(c=>`<option>${c}</option>`).join('');
+  $('#conn').innerHTML='<option value="">All connections</option>'+cn.map(c=>`<option>${esc(c)}</option>`).join('');
+  $('#ctl').hidden=!ALL.length;
+  $('#msg').innerHTML=ALL.length?'':'<p class="warn">No supported PDUs found. The capture may use an unsupported protocol (SCTP, HTTP/2, GTP-U), be TLS-encrypted, or use an unsupported link type.</p>';
+  render()}
+async function handle(file){
+  $('#msg').innerHTML='';
+  try{const buf=await file.arrayBuffer(),pk=parseCap(buf),{out,streams}=analyze(toFlows(pk));load(out,streams,pk.length,file.name)}
+  catch(e){$('#msg').innerHTML=`<p class="warn">Could not read this file: ${esc(e.message)}</p>`}}
+/* ---------- sample ---------- */
+function sample(){
+  const cs=s=>[...[...s].map(c=>c.charCodeAt(0)),0],pdu=(id,st,seq,body)=>{const l=16+body.length,a=new Uint8Array(l),d=new DataView(a.buffer);d.setUint32(0,l);d.setUint32(4,id);d.setUint32(8,st);d.setUint32(12,seq);a.set(body,16);return a};
+  const txt=s=>[...s].map(c=>c.charCodeAt(0));
+  const subm=(seq,msg)=>pdu(4,0,seq,[...cs(''),5,0,...cs('MyBrand'),1,1,...cs('61400111222'),0,0,0,...cs(''),...cs(''),1,0,0,0,msg.length,...txt(msg),0x02,0x04,0,2,0,seq]);
+  const rc='id:msg-0001 sub:001 dlvrd:001 stat:DELIVRD err:000 text:Your code';
+  const C=[[1,pdu(9,0,1,[...cs('smppclient1'),...cs('secret'),...cs('OTA'),0x34,1,1,...cs('')])],[2,subm(2,'Your code is 481516')],[3,pdu(0x15,0,3,[])],[5,subm(4,'Second message')],[8,pdu(0x80000005,0,10,[0])],[9,pdu(6,0,5,[])]];
+  const S=[[1.01,pdu(0x80000009,0,1,cs('SMSC-GW'))],[2.02,pdu(0x80000004,0,2,cs('msg-0001'))],[3.01,pdu(0x80000015,0,3,[])],[5.02,pdu(0x80000004,8,4,[])],
+    [8,pdu(5,0,10,[...cs(''),1,1,...cs('61400111222'),1,1,...cs('MyBrand'),4,0,0,...cs(''),...cs(''),0,0,0,0,rc.length,...txt(rc),0x00,0x1E,0,9,...cs('msg-0001'),0x04,0x27,0,1,2])],[9.01,pdu(0x80000006,0,5,[])]];
+  const mk=(src,sp,dst,dp,L)=>{let seq=1000;return{src,sp,dst,dp,segs:L.map(([t,p],i)=>{const s={seq,t:1760350000+t,fr:i+1,data:p};seq+=p.length;return s})}};
+  const be=(n,l)=>Array.from({length:l},(_,i)=>Math.floor(n/Math.pow(256,l-1-i))&255),avp=(c,fl,d)=>{const l=8+d.length;return[...be(c,4),fl,...be(l,3),...d,...Array((4-l%4)%4).fill(0)]},dia=(rq,hh,A)=>{const a=A.flat();return new Uint8Array([1,...be(20+a.length,3),rq?0x80:0,...be(272,3),...be(4,4),...be(hh,4),...be(hh,4),...a])};
+  const sid=avp(263,0x40,txt('gw1.example.org;1760350000;1')),oh=avp(264,0x40,txt('ccn.example.org')),orl=avp(296,0x40,txt('example.org')),rt=avp(416,0x40,be(1,4)),rn=avp(415,0x40,be(0,4));
+  const ccr=dia(1,77,[sid,oh,orl,avp(283,0x40,txt('example.org')),avp(461,0x40,txt('gy@example.org')),rt,rn,avp(443,0x40,[avp(450,0x40,be(1,4)),avp(444,0x40,txt('310150123456789'))].flat()),avp(456,0x40,[avp(432,0x40,be(100,4)),avp(437,0x40,[])].flat())]);
+  const cca=dia(0,77,[sid,avp(268,0x40,be(2001,4)),oh,orl,rt,rn,avp(456,0x40,[avp(432,0x40,be(100,4)),avp(431,0x40,avp(421,0x40,[0,0,0,0,...be(10485760,4)]))].flat())]);
+  const gie=(t,v)=>[t,...be(v.length,2),0,...v],gtp=(t,seq,I)=>{const a=I.flat();return new Uint8Array([0x48,t,...be(8+a.length,2),0,0,0,0,...be(seq,3),0,...a])};
+  const csr=gtp(32,7,[gie(1,[0x13,0x10,0x05,0x21,0x43,0x65,0x87,0xf9]),gie(82,[6]),gie(87,[0x86,0,0,0x10,0,10,1,1,1]),gie(71,[8,...txt('internet')]),gie(99,[1])]),csp=gtp(33,7,[gie(2,[16,0]),gie(87,[0x87,0,0,0x20,0,10,1,2,1])]);
+  const u=(a,b,t,data)=>({src:a,sp:2123,dst:b,dp:2123,udp:1,segs:[{seq:0,t:1760350000+t,fr:1,data}]});
+  const{out,streams}=analyze([mk('10.0.0.5',49152,'10.0.0.9',2775,C),mk('10.0.0.9',2775,'10.0.0.5',49152,S),mk('10.0.1.1',50100,'10.0.1.2',3868,[[2.5,ccr]]),mk('10.0.1.2',3868,'10.0.1.1',50100,[[2.6,cca]]),u('10.1.1.1','10.1.2.1',2.8,csr),u('10.1.2.1','10.1.1.1',2.9,csp)]);
+  load(out,streams,out.length+4,'sample-trace')}
+/* ---------- events ---------- */
+f.onchange=()=>f.files[0]&&handle(f.files[0]);
+$('#demo').onclick=sample;
+const dz=$('#drop');
+['dragover','dragenter'].forEach(v=>dz.addEventListener(v,e=>{e.preventDefault();dz.classList.add('on')}));
+['dragleave','drop'].forEach(v=>dz.addEventListener(v,e=>{e.preventDefault();dz.classList.remove('on')}));
+dz.addEventListener('drop',e=>e.dataTransfer.files[0]&&handle(e.dataTransfer.files[0]));
+['#q','#cmd','#conn','#proto'].forEach(s=>$(s).addEventListener('input',render));
+const setV=v=>{VIEW=v;$('#t1').setAttribute('aria-pressed',v==='p');$('#t2').setAttribute('aria-pressed',v==='t');render()};
+$('#t1').onclick=()=>setV('p');$('#t2').onclick=()=>setV('t');
+const full=()=>`# SMPP trace: ${FN}\n# ${filtered().length} PDUs\n\n`+filtered().map(textOf).join('\n');
+$('#cp').onclick=async()=>{try{await navigator.clipboard.writeText(full());$('#cp').textContent='Copied'}catch(e){$('#cp').textContent='Copy failed'}setTimeout(()=>$('#cp').textContent='Copy trace',1500)};
+$('#dl').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([full()],{type:'text/plain'}));a.download=(FN||'smpp')+'.trace.txt';a.click()};
+</script>
+</body>
+</html>
